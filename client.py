@@ -27,7 +27,7 @@ def receive(client):
                 msg = client.recv(length)
                 msg = msg.decode()
                 # This is the actual output message
-                print(f'\n{msg}')
+                print(msg)
                 if (msg[:9] == "Connected"):
                     connected = True
         except ConnectionResetError or ValueError:
@@ -36,10 +36,16 @@ def receive(client):
 
 # Login screen (choose name and connect)
 login = tk.Tk()
+login.geometry("200x100")
 # Username entry field
 user = tk.Entry(login, width=30)
 user.insert(0, "Username")
 user.place(x=8,y=15)
+
+# Message Handler
+def handleMsg(msg):
+    if len(msg) > 0:
+        send(s,msg)
 
 # Connect function
 def init():
@@ -48,16 +54,24 @@ def init():
     name = user.get()
     send(s, name)
     login.destroy()
+    threading.Thread(target=receive, args=(s,)).start()
+
+    # Main chatbox interface
+    main = tk.Tk()
+    main.geometry("200x500")
+    typehere = tk.Entry(main, width=30)
+    typehere.place(x=8,y=15)
+    sendbtn = tk.Button(text="Send", width=10, command=lambda:handleMsg(typehere.get()))
+    sendbtn.place(x=60,y=50)
+    main.mainloop()
+
 
 # Confirm button
 connect = tk.Button(text="Connect", width=10, command=lambda:init())
 connect.place(x=60,y=50)
-login.geometry("200x100")
 login.mainloop()
 
-threading.Thread(target=receive, args=(s,)).start()
-
-while True:
-    if connected:
-        msg = input(f'\nType your message > ')
-        send(s, msg)
+# while True:
+#     if connected:
+#         msg = input(f'\nType your message > ')
+#         send(s, msg)
