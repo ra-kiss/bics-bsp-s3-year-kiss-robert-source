@@ -13,8 +13,8 @@ serverS.listen()
 # Decode message length
 def msgLen(client):
     try:
-        # Receive first 1024 bytes indicating length
-        length = client.recv(1024)
+        # Receive first 4 bytes indicating length
+        length = client.recv(4)
         length = int(length.decode())
         #print(f'The message is {length} bytes long')
         return length

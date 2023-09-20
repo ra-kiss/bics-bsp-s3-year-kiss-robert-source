@@ -10,7 +10,7 @@ def send(client, msg):
     try:
         # Send msg length first, then msg
         length = str(len(msg.encode('utf-8')))
-        length += ' '*(1024-int(length))
+        length = ' '*(4-len(length)) + length
         client.send(bytes(length, 'utf-8'))
         client.send(bytes(msg, 'utf-8'))
     except ConnectionResetError:
@@ -31,7 +31,7 @@ def receive(client):
                 if (msg[:9] == "Connected"):
                     connected = True
         except ConnectionResetError or ValueError:
-            print(f'Something went wrong\n Error while connecting to server')
+            print(f'Something went wrong\n Error while receiving message')
             break
 
 # Login screen (choose name and connect)
@@ -44,6 +44,7 @@ user.place(x=8,y=15)
 
 # Message Handler
 def handleMsg(msg):
+    print(msg)
     if len(msg) > 0:
         send(s,msg)
 
