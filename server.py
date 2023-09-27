@@ -31,7 +31,7 @@ def send(client, id, msg):
     try:
         length = str(len(msg))
         # Pad until it is at desired length
-        length += ' '*(1024-len(length))
+        length += ' '*(4-len(length))
         client.send(bytes(length, 'utf-8'))
         client.send(bytes(msg, 'utf-8'))
     except ConnectionResetError:
@@ -65,6 +65,7 @@ while True:
     name = client.recv(msgLen(client))
     name = name.decode()
     uid = name + "#" + str(address[1])
+    print(address)
     clients.append((client, uid))
     print(f'Client {name} connected at {address}')
     connect(client, uid)

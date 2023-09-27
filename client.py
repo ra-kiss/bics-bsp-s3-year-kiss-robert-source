@@ -22,7 +22,7 @@ def receive(client, chatbox):
     global connected
     while True:
         try:
-            length = client.recv(1024)
+            length = client.recv(4)
             if length:
                 length = int(length.decode())
                 msg = client.recv(length)
@@ -83,6 +83,7 @@ connect = tk.Button(text="Connect", width=10, command=lambda:init())
 connect.place(x=60,y=50)
 login.mainloop()
 
+# Old CLI messaging
 # while True:
 #     if connected:
 #         msg = input(f'\nType your message > ')
