@@ -1,4 +1,4 @@
-import socket, threading
+import socket, threading, json
 # Define socket
 serverS = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # Bind socket to host and port
@@ -46,15 +46,25 @@ def relay(client, id):
         length = msgLen(client)
         # If message exists
         if length:
-            # Add ID to message
-            msg = f'<{id}> '
-            msg += client.recv(length).decode()
-            print(msg)
-            for elem in clients:
-                send(elem[0], elem[1], msg)
+            # Get message
+            msg = client.recv(length).decode()
+            print(f'<{id}>' + msg)
+            print('[for:' in msg)
+            if '[for:' in msg:
+                for elem in clients:
+                    if f'[for:{elem[1]}]' in msg:
+                        msg = msg.replace(f'[for:{elem[1]}] ', '')
+                        send(client, id, f'<{id}> ' + msg)
+                        send(elem[0], elem[1], f'<{id}> ' + msg)
+            else:
+                for elem in clients:
+                    send(elem[0], elem[1], f'<{id}> ' + msg)
                     
 def connect(client, id):
-    send(client, id, f'Connected. Welcome {id}')
+    send(client, id, f'Connected. Welcome {id}\n')
+    availables = [c[1] for c in clients]
+    for elem in clients:
+        send(elem[0], elem[1], json.dumps(availables))
     chatT = threading.Thread(target=relay, args=(client,id))
     chatT.start()
 
@@ -67,6 +77,5 @@ while True:
     uid = name + "#" + str(address[1])
     print(address)
     clients.append((client, uid))
-    print(f'Client {name} connected at {address}')
+    print(f'Client {uid} connected at {address}')
     connect(client, uid)
-    
