@@ -1,4 +1,8 @@
 import socket, threading, json
+from sqlalchemy import create_engine, Column, Integer, VARCHAR, JSON, select
+from sqlalchemy.orm import sessionmaker, declarative_base
+import base64
+import re
 # Define socket
 serverS = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # Bind socket to host and port
@@ -9,6 +13,23 @@ serverS.bind((HOST,PORT))
 clients = []
 # Listen for connections
 serverS.listen()
+
+# Use an SQLite database with SQLAlchemy
+engine = create_engine("sqlite:///chatapp.db")
+
+Base = declarative_base()
+
+# Declare chat class such that users are stored in list and chat is one string
+class Chat(Base):
+    __tablename__ = 'chats'
+    id = Column(Integer, primary_key=True)
+    users = Column(VARCHAR, unique=True)
+    contents = Column(VARCHAR, unique=False)
+
+# SQLAlchemy Setup
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+session = Session()
 
 # Decode message length
 def msgLen(client):
@@ -48,22 +69,39 @@ def relay(client, id):
         if length:
             # Get message
             msg = client.recv(length).decode()
-            print(f'<{id}>' + msg)
-            print('[for:' in msg)
-            if '[for:' in msg:
+            print(f'<{id}> ' + msg)
+            if '[getchatwith:' in msg:
+                target = re.search(r'\[getchatwith:(.*?)\]', msg).group(1)
+                usersinchat = "|".join(sorted([id, target]))
+                chatrecord = session.query(Chat).filter(Chat.users == usersinchat).first()
+                send(client,id,f'[getchatwith:return]{chatrecord.contents if chatrecord else ""}')
+            elif '[for:' in msg:
                 for elem in clients:
                     if f'[for:{elem[1]}]' in msg:
                         msg = msg.replace(f'[for:{elem[1]}] ', '')
                         send(client, id, f'<{id}> ' + msg)
                         send(elem[0], elem[1], f'<{id}> ' + msg)
+                        # Check if already existing chat between users, if not create and add first messages as string
+                        # Create string containing users in chat as unique id
+                        usersinchat = "|".join(sorted([id, elem[1]]))
+                        chatrecord = session.query(Chat).filter(Chat.users == usersinchat).first()
+                        if chatrecord:
+                            curcontents = chatrecord.contents
+                            newcontents = f"{curcontents}<{id}> {msg}\n"
+                            chatrecord.contents = newcontents
+                            session.commit()
+                        else:
+                            newchatrecord = Chat(users = usersinchat, contents=f"<{id}> {msg}\n")
+                            session.add(newchatrecord)
+                            session.commit()
             else:
                 for elem in clients:
                     send(elem[0], elem[1], f'<{id}> ' + msg)
                     
 def connect(client, id):
-    send(client, id, f'Connected. Welcome {id}\n')
-    availables = [c[1] for c in clients]
+    send(client, id, f'Connected. Welcome {id.split("#")[0]}\n')
     for elem in clients:
+        availables = [c[1] for c in clients if not c[1] == elem[1]]
         send(elem[0], elem[1], json.dumps(availables))
     chatT = threading.Thread(target=relay, args=(client,id))
     chatT.start()

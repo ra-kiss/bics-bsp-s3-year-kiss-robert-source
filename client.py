@@ -1,11 +1,13 @@
 import socket, threading, json
 import tkinter as tk
 from tkinter import scrolledtext
+import re
 # Create a socket
 s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 HOST = 'localhost'
 PORT = 1234
 connected = False
+name = None
 
 
 def send(client, msg):
@@ -22,7 +24,7 @@ def send(client, msg):
 # Function to print message to chatbox
 def chatprint(msg, chatbox):
     chatbox.config(state= tk.NORMAL)
-    chatbox.insert(tk.END, f'\n{msg}')
+    chatbox.insert(tk.END, f'{msg}')
     chatbox.config(state= tk.DISABLED)
 
 def receive(client, chatbox, userbox):
@@ -35,7 +37,7 @@ def receive(client, chatbox, userbox):
                 msg = client.recv(length)
                 msg = msg.decode()
                 # This is the actual output message
-                print(msg)
+                # print(msg)
                 try:
                     # Load users into sidebar when given
                     users = json.loads(msg)
@@ -46,7 +48,16 @@ def receive(client, chatbox, userbox):
                         userbox.insert(tk.END, user)
                     # chatprint("Users " + str(users), chatbox)
                 except:
-                    chatprint(msg, chatbox)
+                    # Handle case of getting chat history
+                    if '[getchatwith:return]' in msg:
+                        contents = msg.replace('[getchatwith:return]','')
+                        # print(contents)
+                        chatbox.config(state= tk.NORMAL)
+                        chatbox.delete('1.0', tk.END)
+                        chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
+                        chatbox.config(state= tk.DISABLED)
+                    else:
+                        chatprint(msg, chatbox)
                 if (msg[:9] == "Connected"):
                     connected = True
         except ConnectionResetError or ValueError:
@@ -64,6 +75,8 @@ user.place(x=8,y=15)
 
 # Connect function
 def init():
+    global name
+
     # Connect to server
     s.connect((HOST, PORT))
     name = user.get()
@@ -87,12 +100,22 @@ def init():
                 send(s,msg)
             else:
                 send(s,f'[for:{target}] ' + msg)
+    
     # Chatbox defined as global s.t. it is able to be updated from other function
     chatbox = scrolledtext.ScrolledText(main, wrap=tk.WORD, width=45, height=28)
     chatbox.config(state= tk.DISABLED)
     chatbox.place(x=158,y=10)
+
+    # Update chat history everytime selected target user is changed
+    def getChatHistory(event):
+        selection = event.widget.curselection()
+        index = selection[0] if selection else None
+        data = event.widget.get(index) if selection else None
+        send(s, f"[getchatwith:{data}]")
+
     userbox = tk.Listbox(main, selectmode=tk.SINGLE, width=23, height=30)
     userbox.place(x=8,y=9)
+    userbox.bind("<<ListboxSelect>>", getChatHistory)
     sendbtn = tk.Button(text="Send", width=9, command=lambda:handleMsg(typehere.get(), userbox))
     sendbtn.place(x=470,y=467)
     threading.Thread(target=receive, args=(s,chatbox,userbox)).start()
