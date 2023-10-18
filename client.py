@@ -6,7 +6,6 @@ import re
 s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 HOST = 'localhost'
 PORT = 1234
-connected = False
 name = None
 
 
@@ -24,11 +23,12 @@ def send(client, msg):
 # Function to print message to chatbox
 def chatprint(msg, chatbox):
     chatbox.config(state= tk.NORMAL)
-    chatbox.insert(tk.END, f'{msg}')
+    chatbox.insert(tk.END, f'{msg}\n')
     chatbox.config(state= tk.DISABLED)
 
 def receive(client, chatbox, userbox):
     global connected
+    global name
     while True:
         try:
             length = client.recv(4)
@@ -48,6 +48,11 @@ def receive(client, chatbox, userbox):
                         userbox.insert(tk.END, user)
                     # chatprint("Users " + str(users), chatbox)
                 except:
+                    # Handle initial connection
+                    if "Connected" in msg[:10]:
+                        tag = msg.split("#")[1]
+                        tag = re.sub(r'\s+', '', tag)
+                        name = f"{name}#{tag}"
                     # Handle case of getting chat history
                     if '[getchatwith:return]' in msg:
                         contents = msg.replace('[getchatwith:return]','')
@@ -57,9 +62,13 @@ def receive(client, chatbox, userbox):
                         chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
                         chatbox.config(state= tk.DISABLED)
                     else:
-                        chatprint(msg, chatbox)
-                if (msg[:9] == "Connected"):
-                    connected = True
+                        sender = re.search(r'<(.*?)>', msg)
+                        if sender:
+                            sendcond = (sender.group(1) == userbox.get(userbox.curselection()) 
+                                        or sender.group(1) == name)
+                            if sendcond: chatprint(msg, chatbox)
+                        else:
+                            chatprint(msg, chatbox)
         except ConnectionResetError or ValueError:
             print(f'Something went wrong\n Error while receiving message')
             break

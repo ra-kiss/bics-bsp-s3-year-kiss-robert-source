@@ -99,7 +99,7 @@ def relay(client, id):
                     send(elem[0], elem[1], f'<{id}> ' + msg)
                     
 def connect(client, id):
-    send(client, id, f'Connected. Welcome {id.split("#")[0]}\n')
+    send(client, id, f'\nConnected. Welcome {id}\n')
     for elem in clients:
         availables = [c[1] for c in clients if not c[1] == elem[1]]
         send(elem[0], elem[1], json.dumps(availables))
