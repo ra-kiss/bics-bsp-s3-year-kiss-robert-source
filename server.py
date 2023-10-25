@@ -1,7 +1,7 @@
 import socket, threading, json
 from sqlalchemy import create_engine, Column, Integer, VARCHAR, JSON, select
 from sqlalchemy.orm import sessionmaker, declarative_base
-import base64
+import secrets
 import re
 # Define socket
 serverS = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -25,6 +25,13 @@ class Chat(Base):
     id = Column(Integer, primary_key=True)
     users = Column(VARCHAR, unique=True)
     contents = Column(VARCHAR, unique=False)
+
+class Login(Base):
+    __tablename__ = 'login'
+    id = Column(Integer, primary_key=True)
+    username = Column(VARCHAR, unique=True)
+    passhash = Column(VARCHAR, unique=False)
+    salt = Column(VARCHAR, unique=False)
 
 # SQLAlchemy Setup
 Base.metadata.create_all(engine)
@@ -106,14 +113,29 @@ def connect(client, id):
     chatT = threading.Thread(target=relay, args=(client,id))
     chatT.start()
 
+# Generate salt function
+def register(username, password, salt):
+    newchatrecord = Login(username = username, passhash = password, salt = salt)
+    session.add(newchatrecord)
+    session.commit()
+
 # Infinite loop to continue accepting connections
 while True:
     # Define tuple of connection
     (client, address) = serverS.accept()
     name = client.recv(msgLen(client))
     name = name.decode()
-    uid = name + "#" + str(address[1])
+    userRecord = session.query(Login).filter(Login.username == name).first()
+    salt = userRecord.salt if userRecord else secrets.token_hex(16)
+    send(client, name, f'[s:{salt}]')
+    hashedpw = client.recv(msgLen(client))
+    hashedpw = hashedpw.decode()
+    if userRecord: 
+        if userRecord.passhash != hashedpw:
+            client.close()
+            continue
+    else: register(name, hashedpw, salt) 
     print(address)
-    clients.append((client, uid))
-    print(f'Client {uid} connected at {address}')
-    connect(client, uid)
+    clients.append((client, name))
+    print(f'Client {name} connected at {address}')
+    connect(client, name)

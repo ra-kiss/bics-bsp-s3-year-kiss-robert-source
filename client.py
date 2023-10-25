@@ -2,12 +2,13 @@ import socket, threading, json
 import tkinter as tk
 from tkinter import scrolledtext
 import re
+import hashlib
 # Create a socket
 s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 HOST = 'localhost'
 PORT = 1234
 name = None
-
+plainpassword = None
 
 def send(client, msg):
     try:
@@ -25,6 +26,12 @@ def chatprint(msg, chatbox):
     chatbox.config(state= tk.NORMAL)
     chatbox.insert(tk.END, f'{msg}\n')
     chatbox.config(state= tk.DISABLED)
+
+def hash(password, salt):
+    salted = password + salt
+    salted = salted.encode('utf-8')
+    hashed = hashlib.sha256(salted).hexdigest()
+    return hashed
 
 def receive(client, chatbox, userbox):
     global connected
@@ -48,11 +55,11 @@ def receive(client, chatbox, userbox):
                         userbox.insert(tk.END, user)
                     # chatprint("Users " + str(users), chatbox)
                 except:
-                    # Handle initial connection
-                    if "Connected" in msg[:10]:
-                        tag = msg.split("#")[1]
-                        tag = re.sub(r'\s+', '', tag)
-                        name = f"{name}#{tag}"
+                    # Handle initial connection (OLD CODE FROM BEFORE USER AUTH SYSTEM)
+                    # if "Connected" in msg[:10]:
+                    #     tag = msg.split("#")[1]
+                    #     tag = re.sub(r'\s+', '', tag)
+                    #     name = f"{name}#{tag}"
                     # Handle case of getting chat history
                     if '[getchatwith:return]' in msg:
                         contents = msg.replace('[getchatwith:return]','')
@@ -61,6 +68,10 @@ def receive(client, chatbox, userbox):
                         chatbox.delete('1.0', tk.END)
                         chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
                         chatbox.config(state= tk.DISABLED)
+                    elif '[s:' in msg:
+                        contents = re.sub(r'\[s:|\]', '', msg)
+                        hashed = hash(plainpassword, contents)
+                        send(client, hashed)
                     else:
                         sender = re.search(r'<(.*?)>', msg)
                         if sender:
@@ -75,27 +86,35 @@ def receive(client, chatbox, userbox):
 
 # Login screen (choose name and connect)
 login = tk.Tk()
-login.geometry("200x100")
+login.geometry("200x120")
 login.resizable(False, False)
 # Username entry field
 user = tk.Entry(login, width=30)
 user.insert(0, "Username")
 user.place(x=8,y=15)
+# Password entry field
+password = tk.Entry(login, width=30)
+password.place(x=8,y=45)
 
 # Connect function
 def init():
     global name
+    global plainpassword
 
     # Connect to server
     s.connect((HOST, PORT))
     name = user.get()
+    plainpassword = password.get()
     send(s, name)
+    
     login.destroy()
 
-    # Main chatbox interface
+    ## Main chatbox interface
     main = tk.Tk()
     main.geometry('550x500')
     main.resizable(False, False)
+
+    # Text input for messages
     typehere = tk.Entry(main, width=50)
     typehere.place(x=158,y=470)
 
@@ -122,18 +141,23 @@ def init():
         data = event.widget.get(index) if selection else None
         send(s, f"[getchatwith:{data}]")
 
+    # Userlist (userbox) and send button
     userbox = tk.Listbox(main, selectmode=tk.SINGLE, width=23, height=30)
     userbox.place(x=8,y=9)
     userbox.bind("<<ListboxSelect>>", getChatHistory)
     sendbtn = tk.Button(text="Send", width=9, command=lambda:handleMsg(typehere.get(), userbox))
     sendbtn.place(x=470,y=467)
+
+
+
+    # Start thread and loop interface
     threading.Thread(target=receive, args=(s,chatbox,userbox)).start()
     main.mainloop()
 
 
 # Confirm button
-connect = tk.Button(text="Connect", width=10, command=lambda:init())
-connect.place(x=60,y=50)
+connect = tk.Button(text="Login/Register", width=13, command=lambda:init())
+connect.place(x=50,y=80)
 login.mainloop()
 
 # Old CLI messaging
