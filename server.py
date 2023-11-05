@@ -131,9 +131,11 @@ while True:
     hashedpw = client.recv(msgLen(client))
     hashedpw = hashedpw.decode()
     if userRecord: 
-        if userRecord.passhash != hashedpw:
+        if not userRecord.passhash == hashedpw: 
+            send(client, name, '[AUTHFAIL]')
             client.close()
             continue
+        else: send(client, name, '[AUTHSUCCESS]')
     else: register(name, hashedpw, salt) 
     print(address)
     clients.append((client, name))

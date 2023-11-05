@@ -9,6 +9,8 @@ HOST = 'localhost'
 PORT = 1234
 name = None
 plainpassword = None
+auth = None
+sopen = False
 
 def send(client, msg):
     try:
@@ -33,9 +35,39 @@ def hash(password, salt):
     hashed = hashlib.sha256(salted).hexdigest()
     return hashed
 
+def authreceive(client):
+    global connected, name, auth, sopen, s
+    while True:
+        try:
+            length = client.recv(4)
+            if length:
+                length = int(length.decode())
+                msg = client.recv(length)
+                msg = msg.decode()
+                # This is the actual output message
+                # print(msg)
+                if '[s:' in msg:
+                    contents = re.sub(r'\[s:|\]', '', msg)
+                    hashed = hash(plainpassword, contents)
+                    print('Salted Hash Sent')
+                    send(client, hashed)
+                if '[AUTH' in msg:
+                    if '[AUTHFAIL]' in msg: 
+                        s.close()
+                        sopen = False
+                        s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+                    elif '[AUTHSUCCESS]' in msg:
+                        print('Authentication Success')
+                        auth = True
+                    return
+        except ConnectionResetError or ValueError:
+            print(f'Something went wrong\n Error while receiving message')
+            break
+
 def receive(client, chatbox, userbox):
     global connected
     global name
+    global auth
     while True:
         try:
             length = client.recv(4)
@@ -68,10 +100,14 @@ def receive(client, chatbox, userbox):
                         chatbox.delete('1.0', tk.END)
                         chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
                         chatbox.config(state= tk.DISABLED)
-                    elif '[s:' in msg:
-                        contents = re.sub(r'\[s:|\]', '', msg)
-                        hashed = hash(plainpassword, contents)
-                        send(client, hashed)
+                    # elif '[s:' in msg:
+                    #     contents = re.sub(r'\[s:|\]', '', msg)
+                    #     hashed = hash(plainpassword, contents)
+                    #     print('Salted Hash Sent')
+                    #     send(client, hashed)
+                    # elif '[AUTHSUCCESS]' in msg:
+                    #     print('Authentication Success')
+                    #     auth = True
                     else:
                         sender = re.search(r'<(.*?)>', msg)
                         if sender:
@@ -100,14 +136,30 @@ password.place(x=8,y=45)
 def init():
     global name
     global plainpassword
+    global auth
+    global sopen
 
     # Connect to server
-    s.connect((HOST, PORT))
+    if not sopen:
+        s.connect((HOST, PORT))
+        print('Socket Connected')
     name = user.get()
     plainpassword = password.get()
     send(s, name)
+
+    if not sopen:
+        authThread = threading.Thread(target=authreceive, args=(s,))
+        authThread.start()
+        sopen = True
+
+    authThread.join()
+
+    if not auth:
+        print("Not Authenticated")
+        return
     
     login.destroy()
+    auth = True
 
     ## Main chatbox interface
     main = tk.Tk()
@@ -128,7 +180,7 @@ def init():
                 send(s,msg)
             else:
                 send(s,f'[for:{target}] ' + msg)
-    
+        
     # Chatbox defined as global s.t. it is able to be updated from other function
     chatbox = scrolledtext.ScrolledText(main, wrap=tk.WORD, width=45, height=28)
     chatbox.config(state= tk.DISABLED)
