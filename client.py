@@ -35,7 +35,26 @@ def hash(password, salt):
     hashed = hashlib.sha256(salted).hexdigest()
     return hashed
 
-def authreceive(client):
+# Fucntion to handle salt included in [s:] flag
+def handleSalt(client, msg):
+    contents = re.sub(r'\[s:|\]', '', msg)
+    hashed = hash(plainpassword, contents)
+    print('Salted Hash Sent')
+    send(client, hashed)
+
+# Function to hanlde both fail and success authentication flags
+def handleAuthflag(msg):
+    global sopen, auth
+    if '[AUTHFAIL]' in msg: 
+        s.close()
+        sopen = False
+        s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    elif '[AUTHSUCCESS]' in msg:
+        print('Authentication Success')
+        auth = True
+    return
+
+def authReceive(client):
     global connected, name, auth, sopen, s
     while True:
         try:
@@ -47,22 +66,39 @@ def authreceive(client):
                 # This is the actual output message
                 # print(msg)
                 if '[s:' in msg:
-                    contents = re.sub(r'\[s:|\]', '', msg)
-                    hashed = hash(plainpassword, contents)
-                    print('Salted Hash Sent')
-                    send(client, hashed)
+                    handleSalt(client, msg)
                 if '[AUTH' in msg:
-                    if '[AUTHFAIL]' in msg: 
-                        s.close()
-                        sopen = False
-                        s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-                    elif '[AUTHSUCCESS]' in msg:
-                        print('Authentication Success')
-                        auth = True
-                    return
+                    return handleAuthflag(msg)
         except ConnectionResetError or ValueError:
             print(f'Something went wrong\n Error while receiving message')
             break
+
+def getChatTo(chatbox, msg):
+    contents = msg.replace('[getchatwith:return]','')
+    # print(contents)
+    chatbox.config(state= tk.NORMAL)
+    chatbox.delete('1.0', tk.END)
+    chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
+    chatbox.config(state= tk.DISABLED)
+
+def handleNewMsg(chatbox, userbox, msg):
+    sender = re.search(r'<(.*?)>', msg)
+    if sender:
+        sendcond = (sender.group(1) == userbox.get(userbox.curselection()) 
+                                        or sender.group(1) == name)
+        if sendcond: chatprint(msg, chatbox)
+    else:
+        chatprint(msg, chatbox)
+
+def setupUserlist(userbox, msg):
+    # Load users into sidebar when given
+    users = json.loads(msg)
+    userbox.delete(0, tk.END)
+    userbox.insert(tk.END, "Global")
+    userbox.selection_set(0)
+    for user in users:
+        userbox.insert(tk.END, user)
+    # chatprint("Users " + str(users), chatbox)
 
 def receive(client, chatbox, userbox):
     global connected
@@ -78,44 +114,13 @@ def receive(client, chatbox, userbox):
                 # This is the actual output message
                 # print(msg)
                 try:
-                    # Load users into sidebar when given
-                    users = json.loads(msg)
-                    userbox.delete(0, tk.END)
-                    userbox.insert(tk.END, "Global")
-                    userbox.selection_set(0)
-                    for user in users:
-                        userbox.insert(tk.END, user)
-                    # chatprint("Users " + str(users), chatbox)
+                    setupUserlist(userbox, msg)
                 except:
-                    # Handle initial connection (OLD CODE FROM BEFORE USER AUTH SYSTEM)
-                    # if "Connected" in msg[:10]:
-                    #     tag = msg.split("#")[1]
-                    #     tag = re.sub(r'\s+', '', tag)
-                    #     name = f"{name}#{tag}"
                     # Handle case of getting chat history
                     if '[getchatwith:return]' in msg:
-                        contents = msg.replace('[getchatwith:return]','')
-                        # print(contents)
-                        chatbox.config(state= tk.NORMAL)
-                        chatbox.delete('1.0', tk.END)
-                        chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
-                        chatbox.config(state= tk.DISABLED)
-                    # elif '[s:' in msg:
-                    #     contents = re.sub(r'\[s:|\]', '', msg)
-                    #     hashed = hash(plainpassword, contents)
-                    #     print('Salted Hash Sent')
-                    #     send(client, hashed)
-                    # elif '[AUTHSUCCESS]' in msg:
-                    #     print('Authentication Success')
-                    #     auth = True
+                        getChatTo(chatbox, msg)
                     else:
-                        sender = re.search(r'<(.*?)>', msg)
-                        if sender:
-                            sendcond = (sender.group(1) == userbox.get(userbox.curselection()) 
-                                        or sender.group(1) == name)
-                            if sendcond: chatprint(msg, chatbox)
-                        else:
-                            chatprint(msg, chatbox)
+                        handleNewMsg(chatbox, userbox, msg)
         except ConnectionResetError or ValueError:
             print(f'Something went wrong\n Error while receiving message')
             break
@@ -148,7 +153,7 @@ def init():
     send(s, name)
 
     if not sopen:
-        authThread = threading.Thread(target=authreceive, args=(s,))
+        authThread = threading.Thread(target=authReceive, args=(s,))
         authThread.start()
         sopen = True
 
@@ -211,9 +216,3 @@ def init():
 connect = tk.Button(text="Login/Register", width=13, command=lambda:init())
 connect.place(x=50,y=80)
 login.mainloop()
-
-# Old CLI messaging
-# while True:
-#     if connected:
-#         msg = input(f'\nType your message > ')
-#         send(s, msg)

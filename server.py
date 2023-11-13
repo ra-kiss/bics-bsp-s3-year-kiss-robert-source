@@ -83,27 +83,30 @@ def relay(client, id):
                 chatrecord = session.query(Chat).filter(Chat.users == usersinchat).first()
                 send(client,id,f'[getchatwith:return]{chatrecord.contents if chatrecord else ""}')
             elif '[for:' in msg:
-                for elem in clients:
-                    if f'[for:{elem[1]}]' in msg:
-                        msg = msg.replace(f'[for:{elem[1]}] ', '')
-                        send(client, id, f'<{id}> ' + msg)
-                        send(elem[0], elem[1], f'<{id}> ' + msg)
-                        # Check if already existing chat between users, if not create and add first messages as string
-                        # Create string containing users in chat as unique id
-                        usersinchat = "|".join(sorted([id, elem[1]]))
-                        chatrecord = session.query(Chat).filter(Chat.users == usersinchat).first()
-                        if chatrecord:
-                            curcontents = chatrecord.contents
-                            newcontents = f"{curcontents}<{id}> {msg}\n"
-                            chatrecord.contents = newcontents
-                            session.commit()
-                        else:
-                            newchatrecord = Chat(users = usersinchat, contents=f"<{id}> {msg}\n")
-                            session.add(newchatrecord)
-                            session.commit()
+                handleDM(client, id, msg)
             else:
                 for elem in clients:
                     send(elem[0], elem[1], f'<{id}> ' + msg)
+
+def handleDM(client, id, msg):
+    for elem in clients:
+        if f'[for:{elem[1]}]' in msg:
+            msg = msg.replace(f'[for:{elem[1]}] ', '')
+            send(client, id, f'<{id}> ' + msg)
+            send(elem[0], elem[1], f'<{id}> ' + msg)
+                        # Check if already existing chat between users, if not create and add first messages as string
+                        # Create string containing users in chat as unique id
+            usersinchat = "|".join(sorted([id, elem[1]]))
+            chatrecord = session.query(Chat).filter(Chat.users == usersinchat).first()
+            if chatrecord:
+                curcontents = chatrecord.contents
+                newcontents = f"{curcontents}<{id}> {msg}\n"
+                chatrecord.contents = newcontents
+                session.commit()
+            else:
+                newchatrecord = Chat(users = usersinchat, contents=f"<{id}> {msg}\n")
+                session.add(newchatrecord)
+                session.commit()
                     
 def connect(client, id):
     send(client, id, f'\nConnected. Welcome {id}\n')
@@ -136,7 +139,9 @@ while True:
             client.close()
             continue
         else: send(client, name, '[AUTHSUCCESS]')
-    else: register(name, hashedpw, salt) 
+    else: 
+        register(name, hashedpw, salt)
+        send(client, name, '[AUTHSUCCESS]') 
     print(address)
     clients.append((client, name))
     print(f'Client {name} connected at {address}')
