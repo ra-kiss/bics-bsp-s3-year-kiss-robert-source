@@ -1,6 +1,7 @@
 import socket, threading, json
-from sqlalchemy import create_engine, Column, Integer, VARCHAR, JSON, select
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Column, Integer, VARCHAR, JSON, select, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload
+from datetime import datetime
 import secrets
 import re
 # Define socket
@@ -19,19 +20,33 @@ engine = create_engine("sqlite:///chatapp.db")
 
 Base = declarative_base()
 
-# Declare chat class such that users are stored in list and chat is one string
-class Chat(Base):
-    __tablename__ = 'chats'
-    id = Column(Integer, primary_key=True)
-    users = Column(VARCHAR, unique=True)
-    contents = Column(VARCHAR, unique=False)
-
-class Login(Base):
-    __tablename__ = 'login'
+class User(Base):
+    __tablename__ = 'user'
     id = Column(Integer, primary_key=True)
     username = Column(VARCHAR, unique=True)
     passhash = Column(VARCHAR, unique=False)
     salt = Column(VARCHAR, unique=False)
+
+    recipientsRel = relationship("Recipient", back_populates="userRel", foreign_keys="[Recipient.user]")
+
+class Message(Base):
+    __tablename__ = 'message'
+    id = Column(Integer, primary_key=True)
+    sender = Column(Integer, ForeignKey('user.id'))
+    text = Column(VARCHAR, unique=False)
+    timestamp = Column(VARCHAR, unique=False)
+
+    recipientsRel = relationship("Recipient", back_populates="messageRel", foreign_keys="[Recipient.msg]")
+
+class Recipient(Base):
+    __tablename__ = 'recipient'
+    id = Column(Integer, primary_key=True)
+    user = Column(Integer, ForeignKey('user.id'))
+    msg = Column(Integer, ForeignKey('message.id'))
+
+    userRel = relationship("User", back_populates="recipientsRel", foreign_keys="[Recipient.user]")
+    messageRel = relationship("Message", back_populates="recipientsRel", foreign_keys="[Recipient.msg]")
+
 
 # SQLAlchemy Setup
 Base.metadata.create_all(engine)
@@ -69,6 +84,40 @@ def send(client, id, msg):
                 clients.pop(idx)
                 print(f'Unresponsive client {client} removed')
 
+def getChatHistory(session, userID):
+    # Retrieve the User object for the specified user
+    user = session.query(User).filter(User.username == userID).first()
+
+    # Retrieve messages sent by the user
+    sent = (
+        session.query(Message, User.username)
+        .join(User, Message.sender == User.id)
+        .filter(Message.sender == user.id)
+        .options(joinedload(Message.recipientsRel))
+        .all()
+    )
+    sent = [(message, username) for message, username in sent]
+
+    # Retrieve messages received by the user
+    received = (
+        session.query(Message, User.username)
+        .join(Recipient, Recipient.msg == Message.id)
+        .join(User, Message.sender == User.id)  # Adjusted join condition
+        .filter(Recipient.user == user.id)
+        .options(joinedload(Message.recipientsRel))
+        .all()
+    )
+    received = [(message, username) for message, username in received]
+
+    # Merge and sort messages by timestamp
+    allmsg = sent + received
+    allmsg.sort(key=lambda x: x[0].timestamp)
+
+    # Get the text from all messages and merge into one string
+    chathistory = "\n".join(f'<{username}> {message.text}' for message, username in allmsg)
+
+    return chathistory + "\n"
+
 def relay(client, id):
     while True:
         length = msgLen(client)
@@ -78,35 +127,37 @@ def relay(client, id):
             msg = client.recv(length).decode()
             print(f'<{id}> ' + msg)
             if '[getchatwith:' in msg:
-                target = re.search(r'\[getchatwith:(.*?)\]', msg).group(1)
-                usersinchat = "|".join(sorted([id, target]))
-                chatrecord = session.query(Chat).filter(Chat.users == usersinchat).first()
-                send(client,id,f'[getchatwith:return]{chatrecord.contents if chatrecord else ""}')
+                chatrecord = getChatHistory(session, id)
+                send(client, id, f'[getchatwith:return]{chatrecord}')
             elif '[for:' in msg:
-                handleDM(client, id, msg)
+                for elem in clients:
+                    if f'[for:{elem[1]}]' in msg:
+                        handleDM(client, id, msg, elem)
             else:
                 for elem in clients:
                     send(elem[0], elem[1], f'<{id}> ' + msg)
 
-def handleDM(client, id, msg):
-    for elem in clients:
-        if f'[for:{elem[1]}]' in msg:
-            msg = msg.replace(f'[for:{elem[1]}] ', '')
-            send(client, id, f'<{id}> ' + msg)
-            send(elem[0], elem[1], f'<{id}> ' + msg)
-                        # Check if already existing chat between users, if not create and add first messages as string
-                        # Create string containing users in chat as unique id
-            usersinchat = "|".join(sorted([id, elem[1]]))
-            chatrecord = session.query(Chat).filter(Chat.users == usersinchat).first()
-            if chatrecord:
-                curcontents = chatrecord.contents
-                newcontents = f"{curcontents}<{id}> {msg}\n"
-                chatrecord.contents = newcontents
-                session.commit()
-            else:
-                newchatrecord = Chat(users = usersinchat, contents=f"<{id}> {msg}\n")
-                session.add(newchatrecord)
-                session.commit()
+def addMsgtoDB(session, senderID, recipientID, msgtxt):
+    # Create a new message with the provided sender, text, and timestamp
+    sender = session.query(User).filter(User.username == senderID).first()
+    if sender:
+        newMsg = Message(sender=sender.id, text=msgtxt, timestamp=datetime.now())
+        session.add(newMsg)
+        session.commit()  # Commit to get the new message ID generated by the database
+
+    # Retrieve the User object for recipient
+    recipient = session.query(User).filter(User.username == recipientID).first()
+    if recipient:
+        # Create a new recipient entry for the specified recipient and the newly created message
+        newRecipient = Recipient(user=recipient.id, msg=newMsg.id)
+        session.add(newRecipient)
+        session.commit()
+
+def handleDM(client, id, msg, elem):
+    msg = msg.replace(f'[for:{elem[1]}] ', '')
+    send(client, id, f'<{id}> ' + msg)
+    send(elem[0], elem[1], f'<{id}> ' + msg)
+    addMsgtoDB(session, id, elem[1], msg)
                     
 def connect(client, id):
     send(client, id, f'\nConnected. Welcome {id}\n')
@@ -118,7 +169,7 @@ def connect(client, id):
 
 # Generate salt function
 def register(username, password, salt):
-    newchatrecord = Login(username = username, passhash = password, salt = salt)
+    newchatrecord = User(username = username, passhash = password, salt = salt)
     session.add(newchatrecord)
     session.commit()
 
@@ -128,7 +179,7 @@ while True:
     (client, address) = serverS.accept()
     name = client.recv(msgLen(client))
     name = name.decode()
-    userRecord = session.query(Login).filter(Login.username == name).first()
+    userRecord = session.query(User).filter(User.username == name).first()
     salt = userRecord.salt if userRecord else secrets.token_hex(16)
     send(client, name, f'[s:{salt}]')
     hashedpw = client.recv(msgLen(client))
@@ -142,7 +193,7 @@ while True:
     else: 
         register(name, hashedpw, salt)
         send(client, name, '[AUTHSUCCESS]') 
-    print(address)
+    # print(address)
     clients.append((client, name))
     print(f'Client {name} connected at {address}')
     connect(client, name)
