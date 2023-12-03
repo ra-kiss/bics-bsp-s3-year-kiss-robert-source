@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedl
 from datetime import datetime
 import secrets
 import re
+DEBUG = False
 # Define socket
 serverS = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # Bind socket to host and port
@@ -26,6 +27,7 @@ class User(Base):
     username = Column(VARCHAR, unique=True)
     passhash = Column(VARCHAR, unique=False)
     salt = Column(VARCHAR, unique=False)
+    publicKey = Column(VARCHAR, unique=False)
 
     recipientsRel = relationship("Recipient", back_populates="userRel", foreign_keys="[Recipient.user]")
 
@@ -77,6 +79,7 @@ def send(client, id, msg):
         length += ' '*(4-len(length))
         client.send(bytes(length, 'utf-8'))
         client.send(bytes(msg, 'utf-8'))
+        if DEBUG: print("Sending message\n", msg, f"\nto {id}\n")
     except ConnectionResetError:
         print(f'Connection {id} closed')
         for idx, elem in enumerate(clients):
@@ -114,9 +117,13 @@ def getChatHistory(session, userID):
     allmsg.sort(key=lambda x: x[0].timestamp)
 
     # Get the text from all messages and merge into one string
-    chathistory = "\n".join(f'<{username}> {message.text}' for message, username in allmsg)
+    chathistory = "|".join(f'<{username}> {message.text}' for message, username in allmsg)
 
     return chathistory + "\n"
+
+def getKey(target):
+    user = session.query(User).filter(User.username == target).first()
+    return user.publicKey
 
 def relay(client, id):
     while True:
@@ -128,7 +135,10 @@ def relay(client, id):
             print(f'<{id}> ' + msg)
             if '[getchatwith:' in msg:
                 chatrecord = getChatHistory(session, id)
-                send(client, id, f'[getchatwith:return]{chatrecord}')
+                send(client, id, f'[getchatwith:return:{chatrecord}]')
+            elif '[k:getkey:' in msg:
+                target = re.sub(r'\[k:getkey:|]', '', msg)
+                send(client, id, f'[k:getkey:return:{getKey(target)}]')
             elif '[for:' in msg:
                 for elem in clients:
                     if f'[for:{elem[1]}]' in msg:
@@ -137,7 +147,7 @@ def relay(client, id):
                 for elem in clients:
                     send(elem[0], elem[1], f'<{id}> ' + msg)
 
-def addMsgtoDB(session, senderID, recipientID, msgtxt):
+def addMsgtoDB(senderID, recipientID, msgtxt):
     # Create a new message with the provided sender, text, and timestamp
     sender = session.query(User).filter(User.username == senderID).first()
     if sender:
@@ -155,9 +165,10 @@ def addMsgtoDB(session, senderID, recipientID, msgtxt):
 
 def handleDM(client, id, msg, elem):
     msg = msg.replace(f'[for:{elem[1]}] ', '')
+    # print('Sending DM\n', f'<{id}>' + msg)
     send(client, id, f'<{id}> ' + msg)
     send(elem[0], elem[1], f'<{id}> ' + msg)
-    addMsgtoDB(session, id, elem[1], msg)
+    addMsgtoDB(id, elem[1], msg)
                     
 def connect(client, id):
     send(client, id, f'\nConnected. Welcome {id}\n')
@@ -168,8 +179,9 @@ def connect(client, id):
     chatT.start()
 
 # Generate salt function
-def register(username, password, salt):
-    newchatrecord = User(username = username, passhash = password, salt = salt)
+def register(username, password, salt, publicKey):
+    # send(client, name, f'[MAKEKEYS]')
+    newchatrecord = User(username = username, passhash = password, salt = salt, publicKey = publicKey)
     session.add(newchatrecord)
     session.commit()
 
@@ -186,12 +198,28 @@ while True:
     hashedpw = hashedpw.decode()
     if userRecord: 
         if not userRecord.passhash == hashedpw: 
+            # Authentication Failure
             send(client, name, '[AUTHFAIL]')
             client.close()
             continue
-        else: send(client, name, '[AUTHSUCCESS]')
-    else: 
-        register(name, hashedpw, salt)
+        else:
+            # Authentication success, retrieve key for comparison
+            keyFromDB = userRecord.publicKey 
+            send(client, name, f'[k:comparekey:{keyFromDB}]')
+            flag = client.recv(msgLen(client))
+            flag = flag.decode()
+            print("Flag", flag)
+            if '[k:comparekey:FALSE]' in flag:
+                newPubKey = client.recv(msgLen(client))
+                newPubKey = newPubKey.decode()
+                userRecord.publicKey = newPubKey
+                session.commit()
+            send(client, name, '[AUTHSUCCESS]')
+    else:
+        send(client, name, f'[k:generateclientkeys]')
+        publicKey = client.recv(msgLen(client))
+        publicKey = publicKey.decode()
+        register(name, hashedpw, salt, publicKey)
         send(client, name, '[AUTHSUCCESS]') 
     # print(address)
     clients.append((client, name))
