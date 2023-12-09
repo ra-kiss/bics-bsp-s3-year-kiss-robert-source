@@ -5,18 +5,29 @@ import hashlib
 import pathlib
 from client_interface import loginUI, mainUI
 import client_encryption as e2ee
-# Create a socket
-s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+import sys
+# Debug flag, prints all interactions with server to console if enabled
 DEBUG = True
+# Socket setup
+s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 HOST = 'localhost'
 PORT = 1234
+# Variable containing current client's data
 name = None
 plainpassword = None
 salt = None
+PATH = ""
+privKeyPath = None
+# Authentication fail flag, if True will cause authenticate() function to restart
 authfail = False
+# sharedKey between this client and currently selected client from list
 sharedKey = None
+# Threading event that decides whether the current sharedKey is up to date
 sharedKeyUpdated = threading.Event()
 
+'''
+Function to send things to server
+'''
 def send(client, msg):
     try:
         # Send msg length first, then msg
@@ -24,30 +35,46 @@ def send(client, msg):
         length = ' '*(4-len(length)) + length
         client.send(bytes(length, 'utf-8'))
         client.send(bytes(msg, 'utf-8'))
+        if DEBUG: print("Sent message", msg, "to server")
     except ConnectionResetError:
         print(f'Something went wrong\n Unable to send message to server')
         return True
 
-# Function to print message to chatbox
+'''
+Helper function to print things to chatbox
+'''
 def chatprint(msg, chatbox):
     chatbox.config(state= tk.NORMAL)
-    chatbox.insert(tk.END, f'{msg}\n')
+    chatbox.insert(tk.END, f'{msg}')
     chatbox.config(state= tk.DISABLED)
 
+'''
+Helper function to hash a given password with a given salt
+'''
 def hash(password, salt):
     salted = password + salt
     salted = salted.encode('utf-8')
     hashed = hashlib.sha256(salted).hexdigest()
     return hashed
 
-# Fucntion to handle salt included in [s:] flag
-def handleSalt(client, msg):
+'''
+Function to handle salt included in [s:] flag
+- Retrieve salt from flag
+- Hash plainpassword with salt
+- Send salted hash with server s.t. server does not see plainpassword
+'''
+def hashWithSalt(client, saltflag):
     global salt
-    salt = re.sub(r'\[s:|\]', '', msg)
+    salt = re.sub(r'\[s:|\]', '', saltflag)
     hashed = hash(plainpassword, salt)
     if DEBUG: print('Salted Hash Sent')
     send(client, hashed)
 
+'''
+Function to handle authentication flag 
+- If failure, restart socket and set authfail = True, causing authenticate() function to return
+- If success, do nothing (print success)
+'''
 # Function to hanlde both fail and success authentication flags
 def handleAuthflag(msg):
     global authfail, s
@@ -60,34 +87,43 @@ def handleAuthflag(msg):
         print('Authentication Success')
     return
 
-def handleKeys(client, msg):
-    global s, salt, sharedKey, sharedKeyUpdated
-    PATH = ""
-    privKeyPath = pathlib.Path(f'{PATH}{name}-priv.key')
-    if '[k:generateclientkeys' in msg:
-        privKey = e2ee.genPrivKey()
-        fernetKey = e2ee.passToFernetKey(plainpassword, salt)
-        e2ee.storeKeyToFile(privKey, fernetKey, privKeyPath)
-        pubKey = e2ee.getPubKey(privKey)
-        send(client, e2ee.pointToJSON(pubKey))
-    if '[k:comparekey' in msg:
-        if DEBUG: print("Comparing key")
-        pubKeyJSON = re.sub(r'\[k:comparekey:|]', '', msg)
-        compareKeys(privKeyPath, pubKeyJSON)
-    if '[k:getkey:return:' in msg:
-        if DEBUG: print('Receiving Key')
-        targetPubKey = re.sub(r'\[k:getkey:return:|]', '', msg)
-        targetPubKey = e2ee.JSONtoPoint(targetPubKey)
-        if DEBUG: print("Public Key Received\n", targetPubKey)
-        fernetKey = e2ee.passToFernetKey(plainpassword, salt)
-        selfPrivKey = e2ee.getKeyFromFile(fernetKey, privKeyPath)
-        if DEBUG: print("Private Key Received\n", selfPrivKey)
-        sharedKey = targetPubKey * selfPrivKey
-        sharedKey = e2ee.deriveKey(sharedKey)
-        if DEBUG: print("Shared Key Derived\n", sharedKey)
-        sharedKeyUpdated.set()
+'''
+Function which generates shared key between a given target's public key and client's private key
+- Sets sharedKeyUpdated flag upon succesful completion
+'''
+def generateSharedKey(targetPubKey):
+    global sharedKey
+    targetPubKey = e2ee.JSONtoPoint(targetPubKey)
+    if DEBUG: print("Public Key Received\n", targetPubKey)
+    fernetKey = e2ee.passToFernetKey(plainpassword, salt)
+    selfPrivKey = e2ee.getKeyFromFile(fernetKey, privKeyPath)
+    if DEBUG: print("Private Key Received\n", selfPrivKey)
+    sharedKey = targetPubKey * selfPrivKey
+    if DEBUG: print("Shared Key Calculated\n", sharedKey)
+    sharedKey = e2ee.deriveKey(sharedKey)
+    if DEBUG: print("Shared Key Derived\n", sharedKey)
+    sharedKeyUpdated.set()
 
-def compareKeys(privKeyPath, pubKeyJSON):
+'''
+Function which generates client key pair and stores it to file
+'''
+def generateClientKeys(client):
+    privKey = e2ee.genPrivKey()
+    fernetKey = e2ee.passToFernetKey(plainpassword, salt)
+    e2ee.storeKeyToFile(privKey, fernetKey, privKeyPath)
+    pubKey = e2ee.getPubKey(privKey)
+    send(client, e2ee.pointToJSON(pubKey))
+
+'''
+Function that validates whether user's private key and public key are a pair
+- Converts public key JSON to a Point object for calculations
+- If user has private key, retrieve it from file
+- If user does not have private key, generate one
+- Generate public key from private key
+- If they match as a pair, send [k:comparekey:TRUE] to server
+- If they do not match as pair, send [k:comparekey:FALSE] alongside the new public key JSON to server
+'''
+def validateKeys(privKeyPath, pubKeyJSON):
     keyFromDB = e2ee.JSONtoPoint(pubKeyJSON)
         # print('DBKey', keyFromDB)
         # print('Salt', salt)
@@ -106,8 +142,12 @@ def compareKeys(privKeyPath, pubKeyJSON):
     else:
         send(s, '[k:comparekey:TRUE]')
 
+'''
+Special receive function for the purpose of having its own thread,
+runs only while authenticating. Handles salts, as well as AUTH flags and keys
+'''
 def authReceive(client):
-    global connected, name, s
+    global connected, name, s, privKeyPath
     while True:
         try:
             length = client.recv(4)
@@ -117,61 +157,79 @@ def authReceive(client):
                 msg = msg.decode()
                 # This is the actual output message
                 # print(msg)
-                if DEBUG: print(f"Recieved Message {msg} from Server while Authenticating")
+                if DEBUG: print(f"Received Message {msg} from Server while Authenticating")
                 if '[s:' in msg:
-                    handleSalt(client, msg)
+                    hashWithSalt(client, msg)
                 if '[AUTH' in msg:
                     return handleAuthflag(msg)
                 if '[k:' in msg:
-                    handleKeys(client, msg)
+                    privKeyPath = pathlib.Path(f'{PATH}{name}-priv.key')
+                    if '[k:generateclientkeys' in msg:
+                        generateClientKeys(client)
+                    elif '[k:comparekey' in msg:
+                        if DEBUG: print("Comparing key")
+                        pubKeyJSON = re.sub(r'\[k:comparekey:|]', '', msg)
+                        validateKeys(privKeyPath, pubKeyJSON)
+                    elif '[k:getkey:return:' in msg:
+                        if DEBUG: print('Receiving Key')
+                        targetPubKey = re.sub(r'\[k:getkey:return:|]', '', msg)
+                        generateSharedKey(targetPubKey)
         except ConnectionResetError or ValueError:
             print(f'Something went wrong\n Error while receiving message')
             break
 
-def getChatTo(chatbox, msg):
-    contents = re.sub(r'\[getchatwith:return:|]', '', msg)
+'''
+Function used to decrypt given chat history between users
+'''
+def decryptChatlog(chatbox, chatlog):
+    contents = re.sub(r'\[getchatwith:return:|]', '', chatlog)
     # Decrypt Contents
-    '''
-    - Split contents by string | -> yields Array
-    - For each item in array, decrypt index 1 and store [index[0], decryptedIndex[1]] in new array
-    - Concat new array with \n and store as contents
-    '''
     encArr = contents.split("|")
     decArr = []
-    print("Encrypted Messages", encArr)
+    if DEBUG: print("Encrypted Messages", encArr)
     for i in encArr:
         split = i.split(" ")
-        split[1] = e2ee.decrypt(e2ee.b64toBytes(split[1]), sharedKey)
-        joined = " ".join(split)
+        if len(split) >= 2:
+            split[1] = e2ee.decrypt(e2ee.b64toBytes(split[1]), sharedKey)
+        joined = " ".join(split) if split else " "
         decArr.append(joined)
-    print("Formatted Messages", decArr)
+    if DEBUG: print("Formatted Messages", decArr)
     contents = "\n".join(decArr)
     chatbox.config(state= tk.NORMAL)
     chatbox.delete('1.0', tk.END)
     chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
     chatbox.config(state= tk.DISABLED)
 
-def handleNewMsg(chatbox, userbox, msg):
+'''
+Function that handles decrypting and receiving (chatprinting) a message
+'''
+def handleReceivingMsg(chatbox, userbox, msg):
     global sharedKey
     sender = re.search(r'<(.*?)>', msg)
     if sender:
         sender = sender.group(1)
-        target = userbox.get(userbox.curselection())
+        curidx = userbox.curselection()
+        target =  userbox.get(curidx) if curidx else None
+        if DEBUG: print(f'All variables loaded: sender {sender}, target {target} at {curidx}\nMessage: {msg}')
         if (sender == target or sender == name): 
             msg = re.sub(r'<[^>]+> ', '', msg)
             msg = e2ee.b64toBytes(msg)
             decMsg = e2ee.decrypt(msg, sharedKey)
-            decMsg = f'<{sender}> ' + decMsg
+            decMsg = f'\n<{sender}> ' + decMsg
+            if DEBUG: print(f'Message Decrypted:', decMsg)
             chatprint(decMsg, chatbox)
     else:
         chatprint(msg, chatbox)
 
-# Message Handler
-def handleMsg(msg, userbox, inputfield):
+'''
+Function that handles encrypting and sending a message
+'''
+def handleSendingMsg(msg, userbox, inputfield):
     global sharedKey, sharedKeyUpdated
     inputfield.delete(0, tk.END)
     if len(msg) > 0:
-        target = userbox.get(userbox.curselection())
+        curidx = userbox.curselection()
+        target = userbox.get(curidx) if curidx else None
         if target == "Global":
             send(s,msg)
         # Prepend [for:] tag to message
@@ -180,8 +238,10 @@ def handleMsg(msg, userbox, inputfield):
             encMsg = e2ee.bytesToB64(encMsg)
             send(s,f'[for:{target}] ' + encMsg)
 
-# Update chat history everytime selected target user is changed
-def getChatHistory(event):
+'''
+Function that requests chat history from server
+'''
+def requestChatHistory(event):
     selection = event.widget.curselection()
     if selection:
         index = selection[0]
@@ -189,9 +249,12 @@ def getChatHistory(event):
         send(s,f'[k:getkey:{data}]')
         send(s, f"[getchatwith:{data}]")
 
-def setupUserlist(userbox, msg):
+'''
+Function that updates the userbox based on message received from server
+'''
+def updateUserbox(userbox, userlist):
     # Load users into sidebar when given
-    users = json.loads(msg)
+    users = json.loads(userlist)
     userbox.delete(0, tk.END)
     userbox.insert(tk.END, "Global")
     userbox.selection_set(0)
@@ -199,7 +262,11 @@ def setupUserlist(userbox, msg):
         userbox.insert(tk.END, user)
     # chatprint("Users " + str(users), chatbox)
 
+'''
+Main receive function, infinite loop to get messages from server
+'''
 def receive(client, chatbox, userbox):
+    global privKeyPath
     while True:
         try:
             length = client.recv(4)
@@ -208,23 +275,62 @@ def receive(client, chatbox, userbox):
                 msg = client.recv(length)
                 msg = msg.decode()
                 # This is the actual output message
-                if DEBUG: print(f"Recieved Message {msg} from Server")
-                try:
-                    setupUserlist(userbox, msg)
-                except:
-                    # Handle case of getting chat history
-                    if '[k:' in msg:
-                        if DEBUG: print("Received Key Instruction")
-                        handleKeys(client, msg)
-                    elif '[getchatwith:return:' in msg:
-                        getChatTo(chatbox, msg)
-                    else:
-                        handleNewMsg(chatbox, userbox, msg)
+                if DEBUG: print(f"Received Message {msg} from Server")
+                if '[k:' in msg:
+                    if DEBUG: print("Received Key Instruction")
+                    privKeyPath = pathlib.Path(f'{PATH}{name}-priv.key')
+                    if '[k:generateclientkeys' in msg:
+                        generateClientKeys(client)
+                    elif '[k:comparekey' in msg:
+                        if DEBUG: print("Comparing key")
+                        pubKeyJSON = re.sub(r'\[k:comparekey:|]', '', msg)
+                        validateKeys(privKeyPath, pubKeyJSON)
+                    elif '[k:getkey:return:' in msg:
+                        if DEBUG: print('Receiving Key')
+                        targetPubKey = re.sub(r'\[k:getkey:return:|]', '', msg)
+                        generateSharedKey(targetPubKey)
+                elif '[getchatwith:return:' in msg:
+                    decryptChatlog(chatbox, msg)
+                elif '[userlist:' in msg:
+                    newUserlist = re.sub(r'\[userlist:|:]', '', msg)
+                    if DEBUG: print('Userlist Received', newUserlist)
+                    updateUserbox(userbox, newUserlist)
+                elif '[for:' in msg or re.search(r'<(.*?)>', msg):
+                    if DEBUG: print('Handling Receiving Message')
+                    handleReceivingMsg(chatbox, userbox, msg)
+                else:
+                    chatprint(msg, chatbox)
+                # try:
+                #     updateUserbox(userbox, msg)
+                # except:
+                #     # Handle case of getting chat history
+                #     if '[k:' in msg:
+                #         if DEBUG: print("Received Key Instruction")
+                #         privKeyPath = pathlib.Path(f'{PATH}{name}-priv.key')
+                #         if '[k:generateclientkeys' in msg:
+                #             generateClientKeys(client)
+                #         elif '[k:comparekey' in msg:
+                #             if DEBUG: print("Comparing key")
+                #             pubKeyJSON = re.sub(r'\[k:comparekey:|]', '', msg)
+                #             validateKeys(privKeyPath, pubKeyJSON)
+                #         elif '[k:getkey:return:' in msg:
+                #             if DEBUG: print('Receiving Key')
+                #             targetPubKey = re.sub(r'\[k:getkey:return:|]', '', msg)
+                #             generateSharedKey(targetPubKey)
+                #     elif '[getchatwith:return:' in msg:
+                #         decryptChatlog(chatbox, msg)
+                #     else:
+                #         handleReceivingMsg(chatbox, userbox, msg)
         except ConnectionResetError or ValueError:
             print(f'Something went wrong\n Error while receiving message')
             break
 
-# Authenticate function to be triggered when login button pressed
+'''
+Authenticating function, proceeds to main only if salted hash matches DBs salted hash
+- Restarts socket connection in case of authentication failure
+- Send username to server, starting authentication process and start authReceive thread
+- Wait for authReceive thread to complete, which happens after handleAuthFlag() is triggered
+'''
 def authenticate(loginwindow, userfield, passfield):
     global name, plainpassword, authfail, s
 
@@ -236,7 +342,7 @@ def authenticate(loginwindow, userfield, passfield):
     plainpassword = password.get()
     send(s, name)
 
-    authThread = threading.Thread(target=authReceive, args=(s,))
+    authThread = threading.Thread(target=authReceive, args=(s,), daemon=True)
     authThread.start()
     authThread.join()
 
@@ -254,11 +360,13 @@ loginWindow = login['window']
 user = login['userField']
 password = login['passwordField']
 
-
+'''
+Function that initializes main interface and starts receive thread
+'''
 def main():
 
     ## Main chatbox interface
-    main = mainUI(handleMsg, getChatHistory)
+    main = mainUI(handleSendingMsg, requestChatHistory)
     mainWindow = main['window']
         
     chatbox = main['chatbox']
@@ -267,11 +375,12 @@ def main():
     userbox = main['userbox']
 
     # Start thread and loop interface
-    threading.Thread(target=receive, args=(s,chatbox,userbox)).start()
+    threading.Thread(target=receive, args=(s,chatbox,userbox), daemon=True).start()
     mainWindow.mainloop()
+    sys.exit()
 
 
-# Confirm button
+# Start socket connection and initialize login screen
 connect = login['connectButton']
 s.connect((HOST, PORT))
 loginWindow.mainloop()

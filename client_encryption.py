@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives import hashes
 
 '''
-Encryption, Decryption and deriving Keys
+Function to derive bytes key from Point key
 '''
 def deriveKey(key):
     # Use HKDF to derive a key from the shared key
@@ -24,9 +24,13 @@ def deriveKey(key):
         backend=default_backend()
     )
     keyHex = format(key.x, 'x') + format(key.y, 'x')
+    print("keyHex", keyHex)
     derived = hkdf.derive(bytes.fromhex(keyHex))
     return derived
 
+'''
+Function to encrypt a message with a given sharedKey
+'''
 def encrypt(msg, key):
     cipher = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend())
     encryptor = cipher.encryptor()
@@ -41,6 +45,9 @@ def encrypt(msg, key):
     ciphertext = encryptor.update(paddedMsg) + encryptor.finalize()
     return ciphertext
 
+'''
+Function to decrypt a message with a given sharedKey
+'''
 def decrypt(ciphertext, key):
     cipher = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend())
     decryptor = cipher.decryptor()
@@ -57,7 +64,7 @@ def decrypt(ciphertext, key):
 
 
 '''
-Generating Key Pairs
+Functions to generate key pairs
 '''
 curve = registry.get_curve('brainpoolP256r1')
 
@@ -69,12 +76,8 @@ def genPrivKey():
     return secrets.randbelow(curve.field.n) 
 
 '''
-Storing Key in File
+Function to generate fernetKey for decrypting stored .key files using password and salt
 '''
-# def storeFernetKey(filename, fernetKey):
-#     with open(filename, 'wb') as file:
-#         file.write(fernetKey)
-
 def passToFernetKey(password, salt):
     passwordBytes = password.encode('utf-8')
     kdf = PBKDF2HMAC(
@@ -87,13 +90,18 @@ def passToFernetKey(password, salt):
     key = kdf.derive(passwordBytes)
     return base64.urlsafe_b64encode(key)
 
-
+'''
+Function storing a private key to a file
+'''
 def storeKeyToFile(privKey, fernetKey, filename):
     fernet = Fernet(fernetKey)
     encryptedPrivKey = fernet.encrypt(str(privKey).encode('utf-8'))
     with open(filename, 'wb') as file:
         file.write(encryptedPrivKey)
 
+'''
+Function retrieving a private key from a file
+'''
 def getKeyFromFile(fernetKey, filename):
     fernet = Fernet(fernetKey)
     with open(filename, 'rb') as file:
@@ -103,9 +111,8 @@ def getKeyFromFile(fernetKey, filename):
     return decryptedPrivKey
 
 '''
-Converting functions
+Convert from Point object to JSON string and back
 '''
-
 def pointToJSON(point):
     d = {'x': point.x, 'y': point.y}
     return json.dumps(d)
@@ -116,72 +123,11 @@ def JSONtoPoint(jsonstr):
     point = ec.Point(curve, d['x'], d['y'])
     return point
 
+'''
+Convert from bytes to base64 string and back
+'''
 def bytesToB64(bytes):
     return base64.b64encode(bytes).decode('utf-8')
 
 def b64toBytes(b64):
     return base64.b64decode(b64)
-
-
-# aPrivKey = genPrivKey()
-# bPrivKey = genPrivKey()
-# aPubKey = getPubKey(aPrivKey)
-# bPubKey = getPubKey(bPrivKey)
-# sharedKey1 = aPrivKey * bPubKey
-# sharedKey1 = deriveKey(sharedKey1)
-# sharedKey2 = bPrivKey * aPubKey
-# sharedKey2 = deriveKey(sharedKey2)
-# encMsg = encrypt("test", sharedKey1)
-# encMsg = bytesToB64(encMsg)
-# decMsg = b64toBytes(encMsg)
-# decMsg = decrypt(decMsg, sharedKey2)
-
-# print(decMsg)
-
-# # TEST
-# input("\nGenerate private key A>")
-# aPrivKey = genPrivKey()
-# print(aPrivKey)
-# testpw1 = input("\nInput password for private key A>")
-# testsalt1 = input("\nInput salt for private key A>")
-# aFernetKey = passToFernetKey(testpw1, testsalt1) 
-# input("\nStore private key A to file>")
-# storeKeyToFile(aPrivKey, aFernetKey, "aPrivKey.key")
-
-# input("\nOther party generates private key B, in practice stored on their device>")
-# bPrivKey = genPrivKey()
-# input("(Key not visible to client)")
-
-
-
-# input("\nGenerate public key A>")
-# aPubKey = getPubKey(aPrivKey)
-# print(aPubKey)
-# print(type (aPubKey))
-# input("\nOther party generates public key B, in practice stored on the database and retrieved by client>")
-# bPubKey = getPubKey(bPrivKey)
-# print(bPubKey)
-
-# input("\nGenerate shared key 1 from private key A and public key B>")
-# sharedKey1 = aPrivKey * bPubKey
-# derivedKey1 = deriveKey(sharedKey1)
-# print(derivedKey1)
-# msg = input("\nInput message to send encrypted to other party>")
-# encryptedMsg = encrypt(msg, derivedKey1)
-# print("encryptedMsg\n", encryptedMsg)
-# print("base64 string\n", base64.b64encode(encryptedMsg).decode('utf-8'))
-# decodedEncryptedMsg = base64.b64decode()
-# print(decodedEncryptedMsg)
-# print(decodedEncryptedMsg == encryptedMsg)
-
-# input("\nOther party generates shared key 2 from private key B and public key A>")
-# sharedKey2 = aPubKey * bPrivKey
-# derivedKey2 = deriveKey(sharedKey2)
-
-# print(derivedKey2, "\nNotice that: shared key 1 == shared key 2", f'{sharedKey1 == sharedKey2}>')
-
-# input("\nOther party decrypts message using shared key 2>")
-# decryptedMsg = decrypt(encryptedMsg, derivedKey2)
-# print(decryptedMsg)
-
-

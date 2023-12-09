@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedl
 from datetime import datetime
 import secrets
 import re
-DEBUG = False
+DEBUG = True
 # Define socket
 serverS = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # Bind socket to host and port
@@ -21,6 +21,9 @@ engine = create_engine("sqlite:///chatapp.db")
 
 Base = declarative_base()
 
+'''
+Database structure setup
+'''
 class User(Base):
     __tablename__ = 'user'
     id = Column(Integer, primary_key=True)
@@ -55,7 +58,9 @@ Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
 
-# Decode message length
+'''
+Function to decode message length
+'''
 def msgLen(client):
     try:
         # Receive first 4 bytes indicating length
@@ -72,6 +77,9 @@ def msgLen(client):
                 clients.pop(idx)
                 print(f'Unresponsive client {client} removed')
 
+'''
+Function to send any given message to specified client
+'''
 def send(client, id, msg):
     try:
         length = str(len(msg))
@@ -86,27 +94,32 @@ def send(client, id, msg):
             if elem[1] == id:
                 clients.pop(idx)
                 print(f'Unresponsive client {client} removed')
+'''
+Function that retrieves and formats chat history between two users from database
+- Sends an encrypted string of messages separated by | to client
+'''
+def getChatHistory(selfID, targetID):
+    # Retrieve the User objects for the specified users
+    selfUser = session.query(User).filter(User.username == selfID).first()
+    targetUser = session.query(User).filter(User.username == targetID).first()
 
-def getChatHistory(session, userID):
-    # Retrieve the User object for the specified user
-    user = session.query(User).filter(User.username == userID).first()
-
-    # Retrieve messages sent by the user
+    # Retrieve messages sent by selfUser to targetUser
     sent = (
         session.query(Message, User.username)
         .join(User, Message.sender == User.id)
-        .filter(Message.sender == user.id)
+        .join(Recipient, Recipient.msg == Message.id)
+        .filter(Message.sender == selfUser.id, Recipient.user == targetUser.id)
         .options(joinedload(Message.recipientsRel))
         .all()
     )
     sent = [(message, username) for message, username in sent]
 
-    # Retrieve messages received by the user
+    # Retrieve messages sent by targetUser to selfUser
     received = (
         session.query(Message, User.username)
         .join(Recipient, Recipient.msg == Message.id)
-        .join(User, Message.sender == User.id)  # Adjusted join condition
-        .filter(Recipient.user == user.id)
+        .join(User, User.id == Message.sender)
+        .filter(Recipient.user == selfUser.id, Message.sender == targetUser.id)
         .options(joinedload(Message.recipientsRel))
         .all()
     )
@@ -121,10 +134,15 @@ def getChatHistory(session, userID):
 
     return chathistory + "\n"
 
+# Simple helper function to get key from a given user
 def getKey(target):
     user = session.query(User).filter(User.username == target).first()
-    return user.publicKey
+    return user.publicKey if user else None
 
+'''
+Main relay function which relays given information to clients based on a received message
+- Checks for flags and handles them accordingly
+'''
 def relay(client, id):
     while True:
         length = msgLen(client)
@@ -134,19 +152,32 @@ def relay(client, id):
             msg = client.recv(length).decode()
             print(f'<{id}> ' + msg)
             if '[getchatwith:' in msg:
-                chatrecord = getChatHistory(session, id)
+                target = re.sub(r'\[getchatwith:|]', '', msg)
+                chatrecord = getChatHistory(id, target)
                 send(client, id, f'[getchatwith:return:{chatrecord}]')
             elif '[k:getkey:' in msg:
                 target = re.sub(r'\[k:getkey:|]', '', msg)
-                send(client, id, f'[k:getkey:return:{getKey(target)}]')
+                pubKey = getKey(target)
+                if pubKey: send(client, id, f'[k:getkey:return:{pubKey}]')
             elif '[for:' in msg:
+                if DEBUG: print("Received [for:] flag in message", msg)
+                offlineMsg = True
                 for elem in clients:
                     if f'[for:{elem[1]}]' in msg:
-                        handleDM(client, id, msg, elem)
-            else:
-                for elem in clients:
-                    send(elem[0], elem[1], f'<{id}> ' + msg)
+                        msg = msg.replace(f'[for:{elem[1]}] ', '')
+                        handleDM(client, id, msg, elem, offline=False)
+                        offlineMsg = False
+                if offlineMsg == True:
+                    target = (None, re.search(r'\[for:(.*?)\]', msg).group(1))
+                    msg = msg.replace(f'[for:{target[1]}] ', '')
+                    handleDM(client, id, msg, target, offline=True)
+            # else:
+            #     for elem in clients:
+            #         send(elem[0], elem[1], f'<{id}> ' + msg)
 
+'''
+Adds a message with a sender and recipient to the database
+'''
 def addMsgtoDB(senderID, recipientID, msgtxt):
     # Create a new message with the provided sender, text, and timestamp
     sender = session.query(User).filter(User.username == senderID).first()
@@ -163,33 +194,82 @@ def addMsgtoDB(senderID, recipientID, msgtxt):
         session.add(newRecipient)
         session.commit()
 
-def handleDM(client, id, msg, elem):
-    msg = msg.replace(f'[for:{elem[1]}] ', '')
-    # print('Sending DM\n', f'<{id}>' + msg)
-    send(client, id, f'<{id}> ' + msg)
-    send(elem[0], elem[1], f'<{id}> ' + msg)
-    addMsgtoDB(id, elem[1], msg)
-                    
+'''
+Function that handles direct messages, sending the message to both clients
+'''
+def handleDM(senderClient, senderID, msg, recipient, offline):
+    if DEBUG: print('Sending DM\n', f'<{senderID}>' + msg, f'with recipient {recipient}')
+    send(senderClient, senderID, f'<{senderID}> ' + msg)
+    if not offline: send(recipient[0], recipient[1], f'<{senderID}> ' + msg)
+    addMsgtoDB(senderID, recipient[1], msg)
+
+'''
+Function that retrieves previously interacted with users for a given userID
+This allows for offline messaging
+'''
+def getPreviouslyInteracted(userID):
+    # Get the user with the given username
+    user = session.query(User).filter_by(username=userID).first()
+
+    # Get all users who sent messages to the given user
+    senders = (
+        session.query(User)
+        .join(Message, User.id == Message.sender)
+        .join(Recipient, Message.id == Recipient.msg)
+        .filter(Recipient.user == user.id)
+        .all()
+    )
+
+    # Get all users to whom the given user sent messages
+    recipients = (
+        session.query(User)
+        .join(Recipient, User.id == Recipient.user)
+        .filter(Recipient.msg.in_(session.query(Message.id).filter_by(sender=user.id)))
+        .all()
+    )
+
+    # Combine and deduplicate the lists of senders and recipients
+    interactedUsers = list(set(senders + recipients))
+
+    # Extract usernames from the User objects
+    usernames = [u.username for u in interactedUsers]
+
+    return usernames
+
+'''
+Function that confirms new connections to clients, runs after clients are authenticated
+- Also returns userlist to client for each new connection
+'''
 def connect(client, id):
     send(client, id, f'\nConnected. Welcome {id}\n')
     for elem in clients:
-        availables = [c[1] for c in clients if not c[1] == elem[1]]
-        send(elem[0], elem[1], json.dumps(availables))
+        currentlyOnline = [c[1] for c in clients if not c[1] == elem[1]]
+        previouslyInteracted = getPreviouslyInteracted(elem[1])
+        availables = previouslyInteracted + currentlyOnline
+        availables = list(set(availables))
+        if DEBUG: print("Calculated Availables", availables)
+        jsonavailables = json.dumps(availables)
+        send(elem[0], elem[1], f'[userlist:{jsonavailables}:]')
     chatT = threading.Thread(target=relay, args=(client,id))
     chatT.start()
 
-# Generate salt function
+'''
+Function that handles registering a new user with all their respective arguments
+'''
 def register(username, password, salt, publicKey):
     # send(client, name, f'[MAKEKEYS]')
     newchatrecord = User(username = username, passhash = password, salt = salt, publicKey = publicKey)
     session.add(newchatrecord)
     session.commit()
 
-# Infinite loop to continue accepting connections
+'''
+Infinite loop to continue accepting connections
+'''
 while True:
     # Define tuple of connection
     (client, address) = serverS.accept()
-    name = client.recv(msgLen(client))
+    try: name = client.recv(msgLen(client))
+    except ValueError: continue
     name = name.decode()
     userRecord = session.query(User).filter(User.username == name).first()
     salt = userRecord.salt if userRecord else secrets.token_hex(16)

@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import scrolledtext
 
+'''
+Login interface requiring authenticate function
+'''
 def loginUI(authenticate):
     login = tk.Tk()
     login.geometry("200x120")
@@ -19,7 +22,11 @@ def loginUI(authenticate):
             'passwordField': password,
             'connectButton': connect}
 
-def mainUI(handleMsg, getChatHistory):
+'''
+Main chat interface requiring functions for handling sending messages and for retrieving and 
+decrypting chatlog
+'''
+def mainUI(handleSendingMsg, decryptChatlog):
     ## Main chatbox interface
     main = tk.Tk()
     main.geometry('550x500')
@@ -37,8 +44,8 @@ def mainUI(handleMsg, getChatHistory):
     # Userlist (userbox) and send button
     userbox = tk.Listbox(main, selectmode=tk.SINGLE, width=23, height=30)
     userbox.place(x=8,y=9)
-    userbox.bind("<<ListboxSelect>>", getChatHistory)
-    sendbtn = tk.Button(text="Send", width=9, command=lambda:handleMsg(typehere.get(), userbox, typehere))
+    userbox.bind("<<ListboxSelect>>", decryptChatlog)
+    sendbtn = tk.Button(text="Send", width=9, command=lambda:handleSendingMsg(typehere.get(), userbox, typehere))
     sendbtn.place(x=470,y=467)
     return {'window': main,
             'inputField': typehere,
