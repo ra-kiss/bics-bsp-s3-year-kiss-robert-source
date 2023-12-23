@@ -230,10 +230,11 @@ def handleSendingMsg(msg, userbox, inputfield):
     if len(msg) > 0:
         curidx = userbox.curselection()
         target = userbox.get(curidx) if curidx else None
-        if target == "Global":
-            send(s,msg)
-        # Prepend [for:] tag to message
-        else:
+        # if target == "Global":
+        #     send(s,msg)
+        # # Prepend [for:] tag to message
+        # else:
+        if target:
             encMsg = e2ee.encrypt(msg, sharedKey)
             encMsg = e2ee.bytesToB64(encMsg)
             send(s,f'[for:{target}] ' + encMsg)
@@ -256,7 +257,7 @@ def updateUserbox(userbox, userlist):
     # Load users into sidebar when given
     users = json.loads(userlist)
     userbox.delete(0, tk.END)
-    userbox.insert(tk.END, "Global")
+    # userbox.insert(tk.END, "Global")
     userbox.selection_set(0)
     for user in users:
         userbox.insert(tk.END, user)
@@ -300,27 +301,6 @@ def receive(client, chatbox, userbox):
                     handleReceivingMsg(chatbox, userbox, msg)
                 else:
                     chatprint(msg, chatbox)
-                # try:
-                #     updateUserbox(userbox, msg)
-                # except:
-                #     # Handle case of getting chat history
-                #     if '[k:' in msg:
-                #         if DEBUG: print("Received Key Instruction")
-                #         privKeyPath = pathlib.Path(f'{PATH}{name}-priv.key')
-                #         if '[k:generateclientkeys' in msg:
-                #             generateClientKeys(client)
-                #         elif '[k:comparekey' in msg:
-                #             if DEBUG: print("Comparing key")
-                #             pubKeyJSON = re.sub(r'\[k:comparekey:|]', '', msg)
-                #             validateKeys(privKeyPath, pubKeyJSON)
-                #         elif '[k:getkey:return:' in msg:
-                #             if DEBUG: print('Receiving Key')
-                #             targetPubKey = re.sub(r'\[k:getkey:return:|]', '', msg)
-                #             generateSharedKey(targetPubKey)
-                #     elif '[getchatwith:return:' in msg:
-                #         decryptChatlog(chatbox, msg)
-                #     else:
-                #         handleReceivingMsg(chatbox, userbox, msg)
         except ConnectionResetError or ValueError:
             print(f'Something went wrong\n Error while receiving message')
             break
