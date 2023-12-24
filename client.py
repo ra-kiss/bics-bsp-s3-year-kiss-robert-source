@@ -1,13 +1,16 @@
 import socket, threading, json
 import tkinter as tk
+from tkinter import filedialog as fd
 import re
 import hashlib
 import pathlib
 from client_interface import loginUI, mainUI
 import client_encryption as e2ee
 import sys
+import os
 # Debug flag, prints all interactions with server to console if enabled
-DEBUG = True
+DEBUG = False
+RECVCONST = 32
 # Socket setup
 s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 HOST = 'localhost'
@@ -32,7 +35,8 @@ def send(client, msg):
     try:
         # Send msg length first, then msg
         length = str(len(msg.encode('utf-8')))
-        length = ' '*(4-len(length)) + length
+        if DEBUG: print("Sending message of length", length)
+        length = ' '*(RECVCONST-len(length)) + length
         client.send(bytes(length, 'utf-8'))
         client.send(bytes(msg, 'utf-8'))
         if DEBUG: print("Sent message", msg, "to server")
@@ -150,7 +154,7 @@ def authReceive(client):
     global connected, name, s, privKeyPath
     while True:
         try:
-            length = client.recv(4)
+            length = client.recv(RECVCONST)
             if length:
                 length = int(length.decode())
                 msg = client.recv(length)
@@ -181,71 +185,103 @@ def authReceive(client):
 '''
 Function used to decrypt given chat history between users
 '''
-def decryptChatlog(chatbox, chatlog):
+def decryptChatlog(chatbox, chatlog, filebox):
     contents = re.sub(r'\[getchatwith:return:|]', '', chatlog)
     # Decrypt Contents
     encArr = contents.split("|")
     decArr = []
+    fileArr = []
     if DEBUG: print("Encrypted Messages", encArr)
     for i in encArr:
         split = i.split(" ")
-        if len(split) >= 2:
+        if len(split) >= 2 and not "(ISFILE:" in i:
             split[1] = e2ee.decrypt(e2ee.b64toBytes(split[1]), sharedKey)
-        joined = " ".join(split) if split else " "
-        decArr.append(joined)
+            joined = " ".join(split) if split else " "
+            decArr.append(joined)
+        elif "(ISFILE:" in i:
+            filename = split[1]
+            filename = re.sub(r'.*\(ISFILE:([^\]]*)\).*', r'\1', filename)
+            fileArr.append(filename)
     if DEBUG: print("Formatted Messages", decArr)
-    contents = "\n".join(decArr)
+    contents = "\n".join(decArr) if not decArr == ['\n'] else ''
     chatbox.config(state= tk.NORMAL)
     chatbox.delete('1.0', tk.END)
     chatbox.insert(tk.END, f'\nConnected. Welcome {name}\n\n{contents}')
     chatbox.config(state= tk.DISABLED)
+    filebox.delete(0, tk.END)
+    filebox.insert(tk.END, "Files")
+    filebox.insert(tk.END, "───────────────")
+    for file in fileArr:
+        filebox.insert(tk.END, file)
 
 '''
 Function that handles decrypting and receiving (chatprinting) a message
 '''
-def handleReceivingMsg(chatbox, userbox, msg):
+def handleReceivingMsg(chatbox, userbox, filebox, msg):
     global sharedKey
     sender = re.search(r'<(.*?)>', msg)
     if sender:
         sender = sender.group(1)
         curidx = userbox.curselection()
         target =  userbox.get(curidx) if curidx else None
-        if DEBUG: print(f'All variables loaded: sender {sender}, target {target} at {curidx}\nMessage: {msg}')
+        # if DEBUG: print(f'All variables loaded: sender {sender}, target {target} at {curidx}\nMessage: {msg}')
         if (sender == target or sender == name): 
             msg = re.sub(r'<[^>]+> ', '', msg)
+            isfile = False
+            filename = None
+            if '(ISFILE:' in msg: 
+                isfile = True
+                filename = re.sub(r'.*\(ISFILE:([^\]]*)\).*', r'\1', msg)
+                if DEBUG: print("File received, filename", filename)
+                msg = msg.replace(f'(ISFILE:{filename}) ', '')
             msg = e2ee.b64toBytes(msg)
             decMsg = e2ee.decrypt(msg, sharedKey)
-            decMsg = f'\n<{sender}> ' + decMsg
             if DEBUG: print(f'Message Decrypted:', decMsg)
-            chatprint(decMsg, chatbox)
+            if isfile and filename not in filebox.get(0, tk.END):
+                filebox.insert(tk.END, filename)
+            elif not isfile:
+                decMsg = f'\n<{sender}> ' + decMsg
+                chatprint(decMsg, chatbox)
     else:
         chatprint(msg, chatbox)
 
 '''
 Function that handles encrypting and sending a message
 '''
-def handleSendingMsg(msg, userbox, inputfield):
+def handleSendingText(msg, userbox, inputfield):
     global sharedKey, sharedKeyUpdated
     inputfield.delete(0, tk.END)
     if len(msg) > 0:
         curidx = userbox.curselection()
         target = userbox.get(curidx) if curidx else None
-        # if target == "Global":
-        #     send(s,msg)
-        # # Prepend [for:] tag to message
-        # else:
-        if target:
+        if target and curidx[0] > 1:
             encMsg = e2ee.encrypt(msg, sharedKey)
             encMsg = e2ee.bytesToB64(encMsg)
             send(s,f'[for:{target}] ' + encMsg)
 
 '''
+Function that opens file opening dialog and lets you send a file
+'''
+def handleSendingFile(userbox):
+    file = fd.askopenfilename()
+    filename = os.path.split(file)[1]
+    encoded = str(e2ee.fileToB64(file)) if file else None
+    if encoded:
+        curidx = userbox.curselection()
+        target = userbox.get(curidx) if curidx else None
+        if target and curidx[0] > 1:
+            encMsg = e2ee.encrypt(encoded, sharedKey)
+            encMsg = e2ee.bytesToB64(encMsg)
+            send(s,f'[for:{target}] (ISFILE:{filename}) ' + encMsg)
+
+'''
 Function that requests chat history from server
 '''
-def requestChatHistory(event):
-    selection = event.widget.curselection()
-    if selection:
-        index = selection[0]
+def requestChatHistory(userbox, event):
+    curidx = userbox.curselection()
+    if curidx == (): curidx = [-1]
+    if curidx[0] > 1:
+        index = curidx[0]
         data = event.widget.get(index)
         send(s,f'[k:getkey:{data}]')
         send(s, f"[getchatwith:{data}]")
@@ -257,20 +293,46 @@ def updateUserbox(userbox, userlist):
     # Load users into sidebar when given
     users = json.loads(userlist)
     userbox.delete(0, tk.END)
-    # userbox.insert(tk.END, "Global")
-    userbox.selection_set(0)
+    userbox.insert(tk.END, "Contacts")
+    userbox.insert(tk.END, "───────────────")
+    # userbox.selection_set(0)
     for user in users:
         userbox.insert(tk.END, user)
     # chatprint("Users " + str(users), chatbox)
 
 '''
+Function that downloads the selected file
+'''
+def requestFileDownload(filebox):
+    curidx = filebox.curselection()
+    if curidx[0] > 1:
+        index = curidx[0]
+        filename = filebox.get(index)
+        send(s,f'[getfile:{filename}]')
+
+'''
+Function to decrypt and download file
+'''
+def decryptDownload(encFile, filebox):
+    global sharedKey
+    filename = re.sub(r'.*\(ISFILE:([^\]]*)\).*', r'\1', encFile)
+    encFile = encFile.replace(f'(ISFILE:{filename}) ', '')
+    encFile = encFile.encode('utf-8')
+    print(encFile)
+    print(sharedKey)
+    decDl = e2ee.decrypt(e2ee.b64toBytes(encFile), sharedKey)
+    filename = filebox.get(filebox.curselection())
+    print(str(decDl))
+    e2ee.B64toFile(str(decDl), f'dL-{filename}')
+
+'''
 Main receive function, infinite loop to get messages from server
 '''
-def receive(client, chatbox, userbox):
-    global privKeyPath
+def receive(client, chatbox, userbox, filebox):
+    global privKeyPath, sharedKey
     while True:
         try:
-            length = client.recv(4)
+            length = client.recv(RECVCONST)
             if length:
                 length = int(length.decode())
                 msg = client.recv(length)
@@ -291,14 +353,17 @@ def receive(client, chatbox, userbox):
                         targetPubKey = re.sub(r'\[k:getkey:return:|]', '', msg)
                         generateSharedKey(targetPubKey)
                 elif '[getchatwith:return:' in msg:
-                    decryptChatlog(chatbox, msg)
+                    decryptChatlog(chatbox, msg, filebox)
                 elif '[userlist:' in msg:
                     newUserlist = re.sub(r'\[userlist:|:]', '', msg)
                     if DEBUG: print('Userlist Received', newUserlist)
                     updateUserbox(userbox, newUserlist)
+                elif '[getfile:return' in msg:
+                    file = re.sub(r'\[getfile:return:|]', '', msg)
+                    decryptDownload(file, filebox)
                 elif '[for:' in msg or re.search(r'<(.*?)>', msg):
                     if DEBUG: print('Handling Receiving Message')
-                    handleReceivingMsg(chatbox, userbox, msg)
+                    handleReceivingMsg(chatbox, userbox, filebox, msg)
                 else:
                     chatprint(msg, chatbox)
         except ConnectionResetError or ValueError:
@@ -346,16 +411,20 @@ Function that initializes main interface and starts receive thread
 def main():
 
     ## Main chatbox interface
-    main = mainUI(handleSendingMsg, requestChatHistory)
+    main = mainUI(handleSendingText, requestChatHistory, handleSendingFile, requestFileDownload)
     mainWindow = main['window']
-        
-    chatbox = main['chatbox']
 
-    # Userlist (userbox) and send button
+    # Chatbox and userlist (userbox)
+    chatbox = main['chatbox']
     userbox = main['userbox']
 
+    # Filebox and related buttons
+    filebox = main['filebox']
+    uploadBtn = main['uploadButton']
+    downloadBtn = main['downloadButton']
+
     # Start thread and loop interface
-    threading.Thread(target=receive, args=(s,chatbox,userbox), daemon=True).start()
+    threading.Thread(target=receive, args=(s,chatbox,userbox,filebox), daemon=True).start()
     mainWindow.mainloop()
     sys.exit()
 

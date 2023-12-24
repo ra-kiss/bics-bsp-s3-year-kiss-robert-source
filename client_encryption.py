@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives import hashes
+from tkinter import filedialog as fd
 
 '''
 Function to derive bytes key from Point key
@@ -25,7 +26,10 @@ def deriveKey(key):
     )
     keyHex = format(key.x, 'x') + format(key.y, 'x')
     print("keyHex", keyHex)
-    derived = hkdf.derive(bytes.fromhex(keyHex))
+    if len(keyHex) < 128: keyHex = keyHex + '0'*(128 - len(keyHex))
+    keyBytes = bytes.fromhex(keyHex)
+    print("keyBytes", keyBytes)
+    derived = hkdf.derive(keyBytes)
     return derived
 
 '''
@@ -131,3 +135,17 @@ def bytesToB64(bytes):
 
 def b64toBytes(b64):
     return base64.b64decode(b64)
+
+'''
+Convert from file to base64 string and back
+'''
+
+def fileToB64(path):
+    with open(path, 'rb') as file:
+        encoded = base64.b64encode(file.read())
+    return encoded.decode()
+
+def B64toFile(b64, outputPath):
+    decoded = base64.b64decode(b64)
+    with open(outputPath, 'wb') as file:
+        file.write(decoded)
