@@ -1,4 +1,8 @@
 *.db
 relevantAssets
+performanceAnalysis
 __pycache__
 *.key
+test_client.py
+test_server.py
+test_client_launcher.py

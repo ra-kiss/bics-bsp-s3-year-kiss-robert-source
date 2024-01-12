@@ -318,11 +318,8 @@ def decryptDownload(encFile, filebox):
     filename = re.sub(r'.*\(ISFILE:([^\]]*)\).*', r'\1', encFile)
     encFile = encFile.replace(f'(ISFILE:{filename}) ', '')
     encFile = encFile.encode('utf-8')
-    print(encFile)
-    print(sharedKey)
     decDl = e2ee.decrypt(e2ee.b64toBytes(encFile), sharedKey)
     filename = filebox.get(filebox.curselection())
-    print(str(decDl))
     e2ee.B64toFile(str(decDl), f'dL-{filename}')
 
 '''

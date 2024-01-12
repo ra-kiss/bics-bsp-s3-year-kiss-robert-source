@@ -10,7 +10,6 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives import hashes
-from tkinter import filedialog as fd
 
 '''
 Function to derive bytes key from Point key
@@ -25,10 +24,8 @@ def deriveKey(key):
         backend=default_backend()
     )
     keyHex = format(key.x, 'x') + format(key.y, 'x')
-    print("keyHex", keyHex)
     if len(keyHex) < 128: keyHex = keyHex + '0'*(128 - len(keyHex))
     keyBytes = bytes.fromhex(keyHex)
-    print("keyBytes", keyBytes)
     derived = hkdf.derive(keyBytes)
     return derived
 
@@ -70,7 +67,8 @@ def decrypt(ciphertext, key):
 '''
 Functions to generate key pairs
 '''
-curve = registry.get_curve('brainpoolP256r1')
+# curve = registry.get_curve('brainpoolP256r1')
+curve = registry.get_curve('secp256r1')
 
 def getPubKey(privKey):
     global curve

@@ -99,7 +99,7 @@ def send(client, id, msg):
                 print(f'Unresponsive client {client} removed')
 '''
 Function that retrieves and formats chat history between two users from database
-- Sends an encrypted string of messages separated by | to client
+- Returns an encrypted string of messages separated by | to be sent to client
 '''
 def getChatHistory(selfID, targetID):
     # Retrieve the User objects for the specified users
