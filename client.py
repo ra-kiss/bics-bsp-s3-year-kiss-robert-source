@@ -319,8 +319,9 @@ def decryptDownload(encFile, filebox):
     encFile = encFile.replace(f'(ISFILE:{filename}) ', '')
     encFile = encFile.encode('utf-8')
     decDl = e2ee.decrypt(e2ee.b64toBytes(encFile), sharedKey)
-    filename = filebox.get(filebox.curselection())
-    e2ee.B64toFile(str(decDl), f'dL-{filename}')
+    # filename = filebox.get(filebox.curselection())
+    filename = fd.asksaveasfilename()
+    e2ee.B64toFile(str(decDl), filename)
 
 '''
 Main receive function, infinite loop to get messages from server
